@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="color-scheme" content="dark" />
-<title>贪吃蛇 · Neon Snake</title>
+<title>贪吃蛇 · 穿墙版</title>
 <style>
   :root {
     --bg: #070b14;
@@ -459,7 +459,7 @@
         <div class="badge" aria-hidden="true">🐍</div>
         <div>
           <h1>贪吃蛇</h1>
-          <p>NEON SNAKE</p>
+          <p>WRAP MODE</p>
         </div>
       </div>
       <div class="hud-right">
@@ -477,13 +477,13 @@
     </header>
 
     <div class="board-wrap">
-      <canvas id="game" width="720" height="720" aria-label="贪吃蛇游戏区域" role="img"></canvas>
+      <canvas id="game" width="720" height="720" aria-label="贪吃蛇游戏区域，可穿墙" role="img"></canvas>
 
       <div class="overlay" id="overlay">
         <div class="panel" data-panel="ready">
-          <p class="kicker">准备好了吗</p>
+          <p class="kicker">穿墙模式 · WRAP</p>
           <h2>贪吃蛇</h2>
-          <p class="muted">吃下果实让身体变长<br />别撞墙，也别咬到自己</p>
+          <p class="muted">从一边穿到另一边<br />别咬到自己就好</p>
           <button class="primary" id="startBtn" type="button">开始游戏</button>
           <p class="hint-small">按 <kbd>空格</kbd> 或方向键开始</p>
         </div>
@@ -499,7 +499,7 @@
         <div class="panel" data-panel="over" hidden>
           <p class="kicker" id="overKicker">游戏结束</p>
           <h2 id="overTitle">再来一次？</h2>
-          <p class="muted" id="overReason">撞到墙了</p>
+          <p class="muted" id="overReason">咬到自己了</p>
           <div class="result">
             <div><span>本局得分</span><b id="finalScore">0</b></div>
             <div><span>最高分</span><b id="finalBest">0</b></div>
@@ -515,7 +515,7 @@
 
     <footer class="bottom">
       <div class="hints">
-        <span><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> / <kbd>WASD</kbd> 移动</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> / <kbd>WASD</kbd> 移动 · 可穿墙</span>
         <span><kbd>空格</kbd> 暂停 · <kbd>R</kbd> 重开 · <kbd>M</kbd> 静音</span>
       </div>
       <div class="dpad" aria-label="方向控制">
@@ -612,7 +612,7 @@
     flash: 0,
     shakeUntil: 0,
     muted: store.get('snake-muted', '0') === '1',
-    overReason: 'wall'
+    overReason: 'self'
   };
 
   let lastFrame = 0;
@@ -813,14 +813,9 @@
     if (state.queue.length) state.dir = state.queue.shift();
 
     const head = {
-      x: state.snake[0].x + state.dir.x,
-      y: state.snake[0].y + state.dir.y
+      x: (state.snake[0].x + state.dir.x + COLS) % COLS,
+      y: (state.snake[0].y + state.dir.y + ROWS) % ROWS
     };
-
-    if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) {
-      endGame('wall');
-      return;
-    }
 
     const eating = !!state.food && head.x === state.food.x && head.y === state.food.y;
     const eatingBonus = !!state.bonus && head.x === state.bonus.x && head.y === state.bonus.y;
@@ -889,7 +884,7 @@
     } else {
       overKicker.textContent = '游戏结束';
       overTitle.textContent = state.score >= 100 ? '漂亮的一局' : '再来一次？';
-      overReason.textContent = reason === 'self' ? '咬到自己了' : '撞到墙了';
+      overReason.textContent = '咬到自己了';
     }
 
     finalScore.textContent = String(state.score);
@@ -1100,14 +1095,61 @@
     ctx.restore();
   }
 
+  // 把差值折算到环面最短方向，穿墙时动画不会横穿整个棋盘
+  function wrapDelta(from, to, size) {
+    let d = to - from;
+    if (d > size / 2) d -= size;
+    else if (d < -size / 2) d += size;
+    return d;
+  }
+
   function segmentCenter(index, t) {
     const cur = state.snake[index];
     if (!cur) return { x: SIZE / 2, y: SIZE / 2 };
     const prev = state.prevSnake[index] || cur;
+    const dx = wrapDelta(prev.x, cur.x, COLS);
+    const dy = wrapDelta(prev.y, cur.y, ROWS);
     return {
-      x: (prev.x + (cur.x - prev.x) * t) * CELL + CELL / 2,
-      y: (prev.y + (cur.y - prev.y) * t) * CELL + CELL / 2
+      x: (prev.x + dx * t + 0.5) * CELL,
+      y: (prev.y + dy * t + 0.5) * CELL
     };
+  }
+
+  function bodyColor(i, total) {
+    const f = total > 1 ? i / (total - 1) : 0;
+    const hue = 188 - 28 * f;
+    const light = 61 - 6 * f;
+    return 'hsl(' + hue.toFixed(1) + ', 72%, ' + light.toFixed(1) + '%)';
+  }
+
+  // 每一节单独连线，并在越过边界时自动补画对面的一条，形成无缝穿墙
+  function drawPair(a, b, width, color) {
+    const bx = a.x + wrapDelta(a.x, b.x, SIZE);
+    const by = a.y + wrapDelta(a.y, b.y, SIZE);
+
+    const pad = width / 2 + 4;
+    const minX = Math.min(a.x, bx) - pad;
+    const maxX = Math.max(a.x, bx) + pad;
+    const minY = Math.min(a.y, by) - pad;
+    const maxY = Math.max(a.y, by) + pad;
+
+    const xs = [0];
+    const ys = [0];
+    if (minX < 0) xs.push(SIZE);
+    if (maxX > SIZE) xs.push(-SIZE);
+    if (minY < 0) ys.push(SIZE);
+    if (maxY > SIZE) ys.push(-SIZE);
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    for (const ox of xs) {
+      for (const oy of ys) {
+        ctx.beginPath();
+        ctx.moveTo(a.x + ox, a.y + oy);
+        ctx.lineTo(bx + ox, by + oy);
+        ctx.stroke();
+      }
+    }
   }
 
   function drawSnake(t) {
@@ -1115,81 +1157,90 @@
     if (!snake.length) return;
 
     const pts = snake.map((_, i) => segmentCenter(i, t));
-
-    // 身体：一条圆头折线，跟着格子中心平滑滑动
-    const bodyGrad = ctx.createLinearGradient(0, 0, SIZE, SIZE);
-    bodyGrad.addColorStop(0, '#34d399');
-    bodyGrad.addColorStop(0.55, '#2dd4bf');
-    bodyGrad.addColorStop(1, '#22d3ee');
+    const total = pts.length;
+    const detailed = total < 120;
 
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    ctx.strokeStyle = 'rgba(34, 211, 238, .18)';
-    ctx.lineWidth = CELL * 0.82;
-    ctx.beginPath();
-    pts.forEach((p, i) => { i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
-    if (pts.length === 1) ctx.lineTo(pts[0].x + 0.01, pts[0].y);
-    ctx.stroke();
-
-    ctx.shadowColor = 'rgba(45, 212, 191, .55)';
-    ctx.shadowBlur = 16;
-    ctx.strokeStyle = bodyGrad;
-    ctx.lineWidth = CELL * 0.7;
-    ctx.beginPath();
-    pts.forEach((p, i) => { i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
-    if (pts.length === 1) ctx.lineTo(pts[0].x + 0.01, pts[0].y);
-    ctx.stroke();
-
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = 'rgba(236, 254, 255, .22)';
-    ctx.lineWidth = CELL * 0.2;
-    ctx.beginPath();
-    pts.forEach((p, i) => { i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
-    if (pts.length === 1) ctx.lineTo(pts[0].x + 0.01, pts[0].y);
-    ctx.stroke();
+    if (total > 1) {
+      // 外层柔光
+      if (detailed) {
+        for (let i = total - 1; i >= 1; i--) {
+          drawPair(pts[i], pts[i - 1], CELL * 0.8, 'rgba(45, 212, 191, .13)');
+        }
+      }
+      // 彩色身体
+      for (let i = total - 1; i >= 1; i--) {
+        drawPair(pts[i], pts[i - 1], CELL * 0.68, bodyColor(i, total));
+      }
+      // 内侧高光
+      if (detailed) {
+        for (let i = total - 1; i >= 1; i--) {
+          drawPair(pts[i], pts[i - 1], CELL * 0.16, 'rgba(240, 255, 255, .2)');
+        }
+      }
+    }
     ctx.restore();
 
-    // 头
-    const head = pts[0];
+    drawHead(pts[0]);
+  }
+
+  function drawHead(p) {
     const angle = Math.atan2(state.dir.y, state.dir.x);
     const s = CELL * 0.9;
 
-    ctx.save();
-    ctx.translate(head.x, head.y);
-    ctx.rotate(angle);
-    ctx.shadowColor = 'rgba(34, 211, 238, .7)';
-    ctx.shadowBlur = 18;
+    // 头可能正好压在棋盘边界上，需要同时在两侧绘制
+    const hx = ((p.x % SIZE) + SIZE) % SIZE;
+    const hy = ((p.y % SIZE) + SIZE) % SIZE;
+    const pad = s / 2 + 22;
 
-    const headGrad = ctx.createLinearGradient(-s / 2, -s / 2, s / 2, s / 2);
-    headGrad.addColorStop(0, '#6ee7b7');
-    headGrad.addColorStop(1, '#22d3ee');
-    ctx.fillStyle = headGrad;
-    roundRect(-s / 2, -s / 2, s, s, s * 0.34);
-    ctx.fill();
+    const xs = [0];
+    const ys = [0];
+    if (hx - pad < 0) xs.push(SIZE);
+    if (hx + pad > SIZE) xs.push(-SIZE);
+    if (hy - pad < 0) ys.push(SIZE);
+    if (hy + pad > SIZE) ys.push(-SIZE);
 
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = 'rgba(255, 255, 255, .38)';
-    ctx.lineWidth = 1.6;
-    ctx.stroke();
+    for (const ox of xs) {
+      for (const oy of ys) {
+        ctx.save();
+        ctx.translate(hx + ox, hy + oy);
+        ctx.rotate(angle);
 
-    // 眼睛
-    const eyeX = s * 0.17;
-    const eyeY = s * 0.21;
-    const eyeR = s * 0.125;
-    [-1, 1].forEach(sign => {
-      ctx.beginPath();
-      ctx.arc(eyeX, sign * eyeY, eyeR, 0, Math.PI * 2);
-      ctx.fillStyle = '#f8fafc';
-      ctx.fill();
+        ctx.shadowColor = 'rgba(34, 211, 238, .7)';
+        ctx.shadowBlur = 18;
 
-      ctx.beginPath();
-      ctx.arc(eyeX + eyeR * 0.36, sign * eyeY, eyeR * 0.5, 0, Math.PI * 2);
-      ctx.fillStyle = '#0f172a';
-      ctx.fill();
-    });
-    ctx.restore();
+        const headGrad = ctx.createLinearGradient(-s / 2, -s / 2, s / 2, s / 2);
+        headGrad.addColorStop(0, '#6ee7b7');
+        headGrad.addColorStop(1, '#22d3ee');
+        ctx.fillStyle = headGrad;
+        roundRect(-s / 2, -s / 2, s, s, s * 0.34);
+        ctx.fill();
+
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = 'rgba(255, 255, 255, .38)';
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+
+        const eyeX = s * 0.17;
+        const eyeY = s * 0.21;
+        const eyeR = s * 0.125;
+        [-1, 1].forEach(sign => {
+          ctx.beginPath();
+          ctx.arc(eyeX, sign * eyeY, eyeR, 0, Math.PI * 2);
+          ctx.fillStyle = '#f8fafc';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(eyeX + eyeR * 0.36, sign * eyeY, eyeR * 0.5, 0, Math.PI * 2);
+          ctx.fillStyle = '#0f172a';
+          ctx.fill();
+        });
+        ctx.restore();
+      }
+    }
   }
 
   function drawParticles() {
